@@ -38,11 +38,15 @@ class PatientState(TypedDict, total=False):
     # Outgoing transcript collectors populated by engagement_node.
     outgoing_messages: list[dict[str, Any]]
     outgoing_emails: list[dict[str, Any]]
+    retry_care_plan:bool
+
+
 
 
 def empty_state() -> PatientState:
     return PatientState(
         tools_called=[],
+        retry_care_plan=False,
         reasoning_steps=[],
         risk_score=0.0,
         language="en",

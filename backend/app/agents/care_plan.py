@@ -62,6 +62,8 @@ def care_plan_node(state: PatientState) -> PatientState:
         or {}
     )
     tools_called.append("llm:care_plan_generator")
+    if not isinstance(plan,dict) or not plan:
+        raise ValueError("Care plan generation returned an invalid plan")
 
     # Defensive defaults
     plan.setdefault("channel", state.get("channel", "whatsapp_text"))
@@ -85,34 +87,41 @@ def care_plan_node(state: PatientState) -> PatientState:
             "reasoning_trace": plan.get("reasoning", ""),
         },
     )
+    if inserted is None:
+        raise ValueError("Failed to persist care plan")
+        
     tools_called.append("db:insert(care_plans)")
+
+    retry_only= bool(state.get("retry_care_plan".False))
 
     # Step 2: WhatsApp welcome to patient
     name = patient.get("name") or "Patient"
-    welcome = _build_welcome(name, plan)
-    media_url = None
-    if plan.get("channel") == "whatsapp_voice":
-        audio_path = synthesize_sync(welcome, language=plan.get("language", "en"))
-        if audio_path:
-            tools_called.append("voice:gtts")
-            media_url = public_audio_url(audio_path) or None
-
-    if patient.get("phone"):
-        result = send_whatsapp(patient["phone"], welcome, media_url=media_url)
-        tools_called.append(f"whatsapp:welcome({'mock' if result.get('mock') else 'live'})")
-        safe_insert(
-            "interactions",
-            {
-                "patient_id": patient_id,
-                "channel": "whatsapp",
-                "direction": "outbound",
-                "content": welcome,
-                "classification": "welcome",
-                "agent_decision": "send_welcome",
-            },
-        )
-
-    # Step 3a: Welcome email to patient
+    if not state.get("retry_care_plan",False):
+        welcome = _build_welcome(name, plan)
+        media_url = None
+        if plan.get("channel") == "whatsapp_voice":
+            audio_path = synthesize_sync(welcome, language=plan.get("language", "en"))
+            if audio_path:
+                tools_called.append("voice:gtts")
+                media_url = public_audio_url(audio_path) or None
+                
+                
+            if patient.get("phone"):
+                result = send_whatsapp(patient["phone"], welcome, media_url=media_url)
+                tools_called.append(f"whatsapp:welcome({'mock' if result.get('mock') else 'live'})")
+                safe_insert(
+                "interactions",
+                {
+                    "patient_id": patient_id,
+                    "channel": "whatsapp",
+                    "direction": "outbound",
+                    "content": welcome,
+                    "classification": "welcome",
+                    "agent_decision": "send_welcome",
+                },
+            )
+        
+        # Step 3a: Welcome email to patient
     patient_email = patient.get("email")
     if patient_email:
         p_subj, p_html = build_patient_welcome_html(name, plan)
