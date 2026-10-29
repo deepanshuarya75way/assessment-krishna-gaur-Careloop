@@ -6,6 +6,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.agents.care_plan import care_plan_node
 from app.agents.graph import run_onboarding
 from app.agents.state import empty_state
 from app.config import settings
@@ -186,3 +187,66 @@ def delete_patient(patient_id: str):
     if deleted is None:
         raise HTTPException(status_code=500, detail="Failed to remove patient")
     return {"ok": True, "patient_id": patient_id}
+
+@router.post(f"/{patient_id}/retry-care-plan")
+def retry_care_plan(patient_id:str):
+    if not settings.has_supabase:
+        raise HTTPException(status_code=503,detail="Database  not configured")
+
+        patients=safe_select("patients",match={"id":patient_id},limit=1)
+        if not patients:
+            raise HTTPException(status_code=404,detail="Patient not found")
+            existing_plans=safe_select("care_plans",match={"patient_id":patient_id},order=("created_at",True),limit=1,)
+
+            if existing_plans:
+                existing_plan=existing_plans[0].get("plan_json")
+                if isinstance(existing_plan,dict) and existing_plan:
+                    raise HTTPException(status_code=409,detail="A care plan already exists; retry is not needed",)
+                    
+                    clinical_rows= safe_select(
+                        "clinical_data",
+                        match={"patient_id":patient_id},
+                        limit=1)
+
+                    if not clinical_rows or not sdoh_rows:
+                        raise HTTPException(status_code=422,detail="Stored clinical or SDOH context is missing",)
+
+                        clinical_row= clinical_rows[0]
+                        sdoh_profile=sdoh_rows[0]
+
+                        state=empty_state()
+                        state["patient_id"]=patient_id
+                        state["patient_record"]=patients[0]
+                        state["clinical_extracted"]={"diagnosis":clinical_row.get("diagnosis") or "","medications":
+                        clinical_row.get("medications") or [],"comorbidities":
+                        clinical_row.get("comorbidities") or [],"icd_codes":clinical_row.get("icd_codes") or [],"discharge_data":
+                        clinical_row.get("discharge_data"), "follow_up_data":
+                        clinical_row.get("follow_up_data"),}
+                        state["sdoh_profile"]=sdoh_profile
+                        state["language"]=(
+                            sdoh_profile.get("language")
+                            or patients[0].get("language")
+                            or "en"
+                        )
+                        state["channel"]=
+                        patients[0].get("channel_pref") or "whatsapp_text"
+                        state["risk_score"]=_compute_risk_score(patient_id) or 0.0
+                        state["triggered_by"] = " care_plan_retry"
+                        state["retry_care_plan"] = True
+
+                        result= care_plan_node(state)
+
+                        if not result.get("care_plan_persisted"):
+                            raise HTTPException(
+                                status_code=500,
+                                detail="Care plan generation or persistence failed; retry is possible",
+                            )
+
+                            return{
+                                "patient_id": patient_id,
+                                "care_plan": result.get("care_plan"),
+                                "message":
+                            }
+
+
+

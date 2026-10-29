@@ -39,6 +39,7 @@ def _patient_record(patient_id: str) -> dict[str, Any]:
 
 
 def care_plan_node(state: PatientState) -> PatientState:
+    is_retry= state.get("retry_care_plan",False)
     patient_id = state["patient_id"]
     clinical = state.get("clinical_extracted", {}) or {}
     sdoh_profile = state.get("sdoh_profile", {}) or {}
@@ -86,6 +87,11 @@ def care_plan_node(state: PatientState) -> PatientState:
         },
     )
     tools_called.append("db:insert(care_plans)")
+    state["care_plan_persisted"]=bool(inserted)
+
+    if not inserted:
+        log.error("Care plan persistence failed for patient %s",patient_id)
+        return state
 
     # Step 2: WhatsApp welcome to patient
     name = patient.get("name") or "Patient"
@@ -97,7 +103,7 @@ def care_plan_node(state: PatientState) -> PatientState:
             tools_called.append("voice:gtts")
             media_url = public_audio_url(audio_path) or None
 
-    if patient.get("phone"):
+    if not is_retry and patient.get("phone"):
         result = send_whatsapp(patient["phone"], welcome, media_url=media_url)
         tools_called.append(f"whatsapp:welcome({'mock' if result.get('mock') else 'live'})")
         safe_insert(
@@ -114,7 +120,7 @@ def care_plan_node(state: PatientState) -> PatientState:
 
     # Step 3a: Welcome email to patient
     patient_email = patient.get("email")
-    if patient_email:
+    if not is_retry and patient_email:
         p_subj, p_html = build_patient_welcome_html(name, plan)
         p_body = (
             f"Welcome to CareLoop, {name}!\n\n"
@@ -128,7 +134,7 @@ def care_plan_node(state: PatientState) -> PatientState:
 
     # Step 3b: Email caregiver summary (send whenever caregiver_email is present)
     caregiver_email = patient.get("caregiver_email")
-    if caregiver_email:
+    if not is_retry and caregiver_email:
         cg_subj, cg_html = build_caregiver_email_html(name, plan, clinical, sdoh_profile)
         cg_body = _build_caregiver_email(name, plan, clinical, sdoh_profile)
         result = send_email(caregiver_email, cg_subj, cg_body, html=cg_html)
